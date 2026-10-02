@@ -3,21 +3,12 @@ import { tool } from "langchain";
 import { createAgent } from "langchain";
 import { z } from "zod";
 import dotenv from "dotenv";
-import { ChatGoogle } from "@langchain/google";
+import { model } from "./model.ts";
 import readline from "readline/promises";
 import { MemorySaver } from "@langchain/langgraph";
+import { getContacts, createCalendarEvents, manageEmail } from "./tools.ts";
 
 dotenv.config();
-
-const model2 = new ChatOpenAI({
-    temperature: 0,
-    modelName: "gpt-5-mini-",
-});
-
-const model = new ChatGoogle({
-  apiKey: process.env.GOOGLE_API_KEY,
-  model: "gemini-3.5-flash-lite",
-});
 
 const createCalendarEvent = tool(
     async ({ title, startTime, endTime, attendees, location }) => {
@@ -37,27 +28,11 @@ const createCalendarEvent = tool(
     }
 );
 
-const sendEmail = tool(
-    async ({ to, subject, body, cc }) => {
-        // Stub: In practice, this would call SendGrid, Gmail API, etc.
-        return `Email sent to ${to.join(', ')} - Subject: ${subject}`;
-    },
-    {
-        name: "send_email",
-        description: "Send an email via email API. Requires properly formatted addresses.",
-        schema: z.object({
-            to: z.array(z.string()).describe("email addresses"),
-            subject: z.string(),
-            body: z.string(),
-            cc: z.array(z.string()).optional(),
-        }),
-    }
-);
 
 const getAvailableTimeSlots = tool(
     async ({ attendees, date, durationMinutes }) => {
         // Stub: In practice, this would query calendar APIs
-        return ["09:00", "14:00", "16:00"];
+        return ["09:00", "14:00", "16:00", "18:00"];
     },
     {
         name: "get_available_time_slots",
@@ -81,7 +56,7 @@ const manageContacts = tool(
     {
         name: "manage_contacts",
         description: `Get contacts using natural language.
-        use this when user wants toi get list of contacts or even single contact.
+        use this when user wants to get list of contacts or even single contact.
         Input: Natural language contact request (e.g., 'get me the list of contacts in design team')
         Output: List of contacts in JSON format`.trim(),
         schema: z.object({
@@ -111,44 +86,16 @@ Always confirm what was scheduled in your final response.
 
 const calendarAgent = createAgent({
     model: model,
-    tools: [createCalendarEvent, getAvailableTimeSlots],
+    tools: [createCalendarEvents, getAvailableTimeSlots],
     systemPrompt: CALENDAR_AGENT_PROMPT,
 });
 
-const EMAIL_AGENT_PROMPT = `
-You are an email assistant.
-Compose professional emails based on natural language requests.
-Extract recipient information and craft appropriate subject lines and body text.
-Use send_email to send the message.
-Always confirm what was sent in your final response.
-`.trim();
 
-const emailAgent = createAgent({
-    model: model,
-    tools: [sendEmail],
-    systemPrompt: EMAIL_AGENT_PROMPT,
-});
 
 const CONTACT_AGENT_PROMPT = `You are a contact assistant.
 Find or create contact records as per requirements.
 Use get_contacts to fetch contact list.`.trim();
 
-const getContacts = tool(
-    async ({ search }) => {
-        return JSON.stringify([
-            { id: 1, team: "Design", name: "John", email: "BpZ6s@example.com", phone: "123-456-7890" },
-            { id: 2, team: "Development", name: "Jane Doe", email: "tGtZ5@example.com", phone: "987-654-3210" },
-            { id: 3, team: "DevOps", name: "Bob Smith", email: "tGtZ5@example.com", phone: "987-654-3210" },
-        ]);
-    },
-    {
-        name: "get_contacts",
-        description: "Get a list of contacts",
-        schema: z.object({
-            search: z.string().describe('Search query for the contact. e.g. design or John'),
-        }),
-    }
-);
 
 const contactAgent = createAgent({
     model,
@@ -230,29 +177,6 @@ Input: Natural language scheduling request (e.g., 'meeting with design team next
     }
 );
 
-const manageEmail = tool(
-    async ({ request }) => {
-        const result = await emailAgent.invoke({
-            messages: [{ role: "user", content: request }]
-        });
-        const lastMessage = result.messages[result.messages.length - 1];
-        return lastMessage.text;
-    },
-    {
-        name: "manage_email",
-        description: `
-Send emails using natural language.
-
-Use this when the user wants to send notifications, reminders, or any email communication.
-Handles recipient extraction, subject generation, and email composition.
-
-Input: Natural language email request (e.g., 'send them a reminder about the meeting')
-    `.trim(),
-        schema: z.object({
-            request: z.string().describe("Natural language email request"),
-        }),
-    }
-);
 
 async function supervisorAgentTest(userInput:string, config:any) {
     // const query = userInput;
@@ -290,13 +214,14 @@ When a request involves multiple actions, use multiple tools in sequence. Make s
 
 const supervisorAgent = createAgent({
     model: model,
-    tools: [scheduleEvent, manageEmail, manageContacts],
+    tools: [ manageContacts, scheduleEvent, manageEmail],
     systemPrompt: SUPERVISOR_PROMPT,
     checkpointer: new MemorySaver(),
 });
 
 async function main() {
-    const config = { configurable: {thread_id: '1'} };
+    
+    const config = { configurable: {thread_id: crypto.randomUUID() } };
     const rl= readline.createInterface({
         input: process.stdin,
         output: process.stdout

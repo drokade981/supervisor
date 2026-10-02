@@ -17,10 +17,13 @@
     "@langchain/langgraph": "^1.4.18",
     "@langchain/openai": "^1.6.0",
     "dotenv": "^18.0.5",
+    "express": "^5.2.1",
+    "googleapis": "^182.0.0",
     "langchain": "^1.5.14",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3"
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2"
   }
 }
