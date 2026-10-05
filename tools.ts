@@ -1,6 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import z from "zod";
-import { createAgent } from "langchain";
+import { createAgent, humanInTheLoopMiddleware } from "langchain";
 import { google } from "googleapis";
 import dotenv from "dotenv";
 import { model } from "./model.ts";
@@ -229,6 +229,12 @@ const emailAgent = createAgent({
     model: model,
     tools: [sendEmail],
     systemPrompt: EMAIL_AGENT_PROMPT,
+    middleware: [
+        humanInTheLoopMiddleware({
+            interruptOn: { send_email: true },
+            descriptionPrefix: "The user will review the email before sending. If the user approves, the email will be sent. If not, the user can request changes.",
+        })
+    ]
 });
 
 export const manageEmail = tool(

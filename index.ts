@@ -5,28 +5,10 @@ import { z } from "zod";
 import dotenv from "dotenv";
 import { model } from "./model.ts";
 import readline from "readline/promises";
-import { MemorySaver } from "@langchain/langgraph";
+import { Command, MemorySaver } from "@langchain/langgraph";
 import { getContacts, createCalendarEvents, manageEmail } from "./tools.ts";
 
 dotenv.config();
-
-const createCalendarEvent = tool(
-    async ({ title, startTime, endTime, attendees, location }) => {
-        // Stub: In practice, this would call Google Calendar API, Outlook API, etc.
-        return `Event created: ${title} from ${startTime} to ${endTime} with ${attendees.length} attendees`;
-    },
-    {
-        name: "create_calendar_event",
-        description: "Create a calendar event. Requires exact ISO datetime format.",
-        schema: z.object({
-            title: z.string(),
-            startTime: z.string().describe("ISO format: '2024-01-15T14:00:00'"),
-            endTime: z.string().describe("ISO format: '2024-01-15T15:00:00'"),
-            attendees: z.array(z.string()).describe("email addresses"),
-            location: z.string().optional(),
-        }),
-    }
-);
 
 
 const getAvailableTimeSlots = tool(
@@ -177,40 +159,84 @@ Input: Natural language scheduling request (e.g., 'meeting with design team next
     }
 );
 
+type InterruptValue = {
+    actionRequests: {
+        description: string;
+    }[];
+    reviewConfigs: {
+        allowedDecisions: string[];
+    }[]
+}
+
+let interrupts: any[] = [];
 
 async function supervisorAgentTest(userInput:string, config:any) {
     // const query = userInput;
 
-    const stream = await supervisorAgent.streamEvents(
+    let output = "";
+    const resume: Record<string, any> = {};
+
+    if(interrupts.length) {
+        const interrupt = interrupts[0];
+        resume[interrupt.id] = {
+            decisions: [{ type: userInput === '1' ? 'approve' :  userInput === '3' ? 'reject' : '' }]
+        };
+    }
+    console.log(JSON.stringify(resume));
+
+    const result = await supervisorAgent.invoke(
+        interrupts.length ? new Command({ resume }) :
         { messages: [{ role: "user", content: userInput }] },
         { ...config, version: "v3" },
     );
 
-    await Promise.all([
-        (async () => {
-            for await (const message of stream.messages) {
-                for await (const token of message.text) {
-                    process.stdout.write(token);
-                }
-            }
-        })(),
-        (async () => {
-            for await (const call of stream.toolCalls) {
-                console.log(`\nTool call: ${call.name}(${JSON.stringify(call.input)})`);
-                console.log(`Tool result: ${await call.output}`);
-            }
-        })(),
-    ]);
+    interrupts = [];
+
+    if(result.__interrupt__) {
+        interrupts.push(result.__interrupt__[0]);
+        // show the approval message to the user
+        output += (result.__interrupt__[0].value as InterruptValue).actionRequests[0].description + "\n\n";
+        output += 'Please Choose one of the following options:\n\n';
+        
+        output += (result.__interrupt__[0].value as InterruptValue).reviewConfigs[0].allowedDecisions.map((decision, index) => `${index + 1}. ${decision}`).join('\n') + '\n\n';
+
+        console.log(output);
+
+    } else {
+        console.log('result', result.messages[result.messages.length - 1].content);
+    }
+
+    // await Promise.all([
+    //     (async () => {
+    //         for await (const message of stream.messages) {
+    //             for await (const token of message.text) {
+    //                 process.stdout.write(token);
+    //             }
+    //         }
+    //     })(),
+    //     (async () => {
+    //         for await (const call of stream.toolCalls) {
+    //             console.log(`\nTool call: ${call.name}(${JSON.stringify(call.input)})`);
+    //             console.log(`Tool result: ${await call.output}`);
+    //         }
+    //     })(),
+    // ]);
 }
 
+const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const currentDateTime = new Date().toLocaleString("sv-SE").replace(',', 'T');
+
 const SUPERVISOR_PROMPT = `
-You are a helpful personal assistant.
-You can schedule calendar events and send emails.
-To send an email/notification, you must first get the contact information using the manage_contacts tool to get email address.
-You will get contact information from manage_contacts tool before sending email or scheduling an event.
-Break down user requests into appropriate tool calls and coordinate the results.
-When a request involves multiple actions, use multiple tools in sequence. Make sure to call the tools in correct order.
-`.trim();
+    You are a helpful personal assistant.
+    You can schedule calendar events and send emails.
+    To send an email/notification, you must first get the contact information using the manage_contacts tool to get email address.
+    You will get contact information from manage_contacts tool before sending email or scheduling an event.
+    Break down user requests into appropriate tool calls and coordinate the results.
+    When a request involves multiple actions, use multiple tools in sequence. Make sure to call the tools in correct order.
+    IMPORTANT: If the user rejects an email or action Do NOT recreate or retry. Simply acknowledge the rejection and ask the user what they would like to do instead. Do not attempt to send a modification version unless explicitly asked.
+    current DateTime: ${currentDateTime}
+    current timezone: ${timezone}
+    `.trim();                      
 
 const supervisorAgent = createAgent({
     model: model,
